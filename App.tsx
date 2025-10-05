@@ -12,31 +12,45 @@ import AdminPanel from './components/AdminPanel';
 import MenuItemDetail from './components/MenuItemDetail';
 import Cart from './components/Cart';
 import Auth from './components/Auth';
-import AdminLoginModal from './components/AdminLoginModal'; // Import the new modal
-import FeaturedDishes from './components/FeaturedDishes'; // Import the new component
-import FeaturedDesserts from './components/FeaturedDesserts'; // Import the new desserts component
-import TalabatNotification from './components/TalabatNotification'; // Import the new notification component
-import { INITIAL_MENU_ITEMS, INITIAL_GALLERY_IMAGES, INITIAL_SITE_CONTENT, SOCIAL_LINKS, INITIAL_USERS } from './constants';
+import AdminLoginModal from './components/AdminLoginModal';
+import FeaturedDishes from './components/FeaturedDishes';
+import FeaturedDesserts from './components/FeaturedDesserts';
+import TalabatNotification from './components/TalabatNotification';
+import { loadState, saveState } from './services/storageService';
 import type { Page, MenuItem, Order, GalleryImage, SiteContent, SocialLink, CartItem, User, Currency } from './types';
 
 const App: React.FC = () => {
+  const initialState = useMemo(() => loadState(), []);
+
   const [currentPage, setCurrentPage] = useState<Page>('home');
-  const [menuItems, setMenuItems] = useState<MenuItem[]>(INITIAL_MENU_ITEMS);
-  const [orders, setOrders] = useState<Order[]>([]);
-  const [galleryImages, setGalleryImages] = useState<GalleryImage[]>(INITIAL_GALLERY_IMAGES);
-  const [siteContent, setSiteContent] = useState<SiteContent>(INITIAL_SITE_CONTENT);
-  const [socialLinks, setSocialLinks] = useState<SocialLink[]>(SOCIAL_LINKS);
-  const [selectedMenuItem, setSelectedMenuItem] = useState<MenuItem | null>(null);
   
-  // New E-commerce State
+  // Persisted State
+  const [menuItems, setMenuItems] = useState<MenuItem[]>(initialState.menuItems);
+  const [orders, setOrders] = useState<Order[]>(initialState.orders);
+  const [galleryImages, setGalleryImages] = useState<GalleryImage[]>(initialState.galleryImages);
+  const [siteContent, setSiteContent] = useState<SiteContent>(initialState.siteContent);
+  const [socialLinks, setSocialLinks] = useState<SocialLink[]>(initialState.socialLinks);
+  const [users, setUsers] = useState<User[]>(initialState.users);
+  
+  // Ephemeral State
+  const [selectedMenuItem, setSelectedMenuItem] = useState<MenuItem | null>(null);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [users, setUsers] = useState<User[]>(INITIAL_USERS); // Mock user DB
   const [currency, setCurrency] = useState<Currency>('usd');
-
-  // State for the new admin login modal
   const [isAdminLoginVisible, setIsAdminLoginVisible] = useState(false);
   const [isTalabatVisible, setIsTalabatVisible] = useState(false);
+
+  // Effect to save state to localStorage whenever persisted data changes
+  useEffect(() => {
+    saveState({
+      menuItems,
+      orders,
+      galleryImages,
+      siteContent,
+      socialLinks,
+      users,
+    });
+  }, [menuItems, orders, galleryImages, siteContent, socialLinks, users]);
 
   useEffect(() => {
     const { enabled, frequencyMinutes } = siteContent.notificationSettings;
@@ -46,13 +60,11 @@ const App: React.FC = () => {
     }
 
     if (frequencyMinutes === 0) {
-        // Session-based logic
         const dismissed = sessionStorage.getItem('notificationDismissed');
         if (!dismissed) {
             setIsTalabatVisible(true);
         }
     } else {
-        // Time-based logic
         const lastDismissed = localStorage.getItem('notificationLastDismissed');
         const now = new Date().getTime();
         const frequencyMs = frequencyMinutes * 60 * 1000;
@@ -61,8 +73,7 @@ const App: React.FC = () => {
             setIsTalabatVisible(true);
         }
     }
-}, [siteContent.notificationSettings]);
-
+  }, [siteContent.notificationSettings]);
 
   const handleSetPage = useCallback((page: Page) => {
     setSelectedMenuItem(null);
@@ -117,8 +128,9 @@ const App: React.FC = () => {
       alert('User with this phone number already exists.');
       return false;
     }
+    const newId = users.length > 0 ? Math.max(...users.map(u => u.id)) + 1 : 1;
     const newUser: User = {
-      id: users.length + 1,
+      id: newId,
       phone,
       password: pass,
       loyaltyPoints: 0,
@@ -128,7 +140,6 @@ const App: React.FC = () => {
     setCurrentPage('checkout');
     return true;
   }, [users]);
-
 
   const handleLogout = useCallback(() => {
     setCurrentUser(null);
@@ -155,38 +166,44 @@ const App: React.FC = () => {
   }, [cart, currentUser, currency]);
 
   const handleAwardPoints = useCallback((orderId: string) => {
-    setOrders(prevOrders => {
-      const orderIndex = prevOrders.findIndex(o => o.id === orderId);
-      if (orderIndex === -1) return prevOrders;
+    const orderIndex = orders.findIndex(o => o.id === orderId);
+    if (orderIndex === -1) return;
 
-      const order = prevOrders[orderIndex];
-      if (order.pointsAwarded || order.totalPrice.currency !== 'jod' || !order.userId) return prevOrders;
+    const order = orders[orderIndex];
+    if (order.pointsAwarded || order.totalPrice.currency !== 'jod' || !order.userId) return;
 
-      const pointsToAdd = Math.floor(order.totalPrice.value);
-      
-      setUsers(prevUsers => {
-          const userIndex = prevUsers.findIndex(u => u.phone === order.userId);
-          if (userIndex === -1) return prevUsers;
+    const pointsToAdd = Math.floor(order.totalPrice.value);
+    
+    let updatedUserForSession: User | null = null;
 
-          const updatedUsers = [...prevUsers];
-          updatedUsers[userIndex] = {
-              ...updatedUsers[userIndex],
-              loyaltyPoints: updatedUsers[userIndex].loyaltyPoints + pointsToAdd,
-          };
-          
-          // Update current user state if they are the one getting points
-          if(currentUser && currentUser.phone === order.userId) {
-            setCurrentUser(updatedUsers[userIndex]);
-          }
+    setUsers(prevUsers => {
+        const userIndex = prevUsers.findIndex(u => u.phone === order.userId);
+        if (userIndex === -1) return prevUsers;
 
-          return updatedUsers;
-      });
+        const updatedUsers = [...prevUsers];
+        const targetUser = updatedUsers[userIndex];
+        updatedUsers[userIndex] = {
+            ...targetUser,
+            loyaltyPoints: targetUser.loyaltyPoints + pointsToAdd,
+        };
+        
+        if(currentUser && currentUser.phone === order.userId) {
+          updatedUserForSession = updatedUsers[userIndex];
+        }
 
-      const updatedOrders = [...prevOrders];
-      updatedOrders[orderIndex] = { ...order, pointsAwarded: true };
-      return updatedOrders;
+        return updatedUsers;
     });
-  }, [currentUser]);
+
+    setOrders(prevOrders => {
+        const updatedOrders = [...prevOrders];
+        updatedOrders[orderIndex] = { ...order, pointsAwarded: true };
+        return updatedOrders;
+    });
+
+    if (updatedUserForSession) {
+        setCurrentUser(updatedUserForSession);
+    }
+  }, [orders, users, currentUser]);
 
   const handleDismissTalabat = () => {
     setIsTalabatVisible(false);
@@ -240,7 +257,7 @@ const App: React.FC = () => {
         return <Gallery images={galleryImages} />;
       case 'contact':
         return <Contact siteContent={siteContent} />;
-      case 'checkout': // Was 'order' page
+      case 'checkout':
         return <Checkout addOrder={handleAddOrder} cart={cart} currency={currency} />;
       case 'cart':
         return <Cart cartItems={cart} onUpdateQuantity={handleUpdateCartQuantity} onCheckout={handleCheckout} currency={currency} />;
